@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 250 250 252;
+  --card: 255 255 255;
+  --text: 15 23 42;
+  --muted: 100 116 139;
+  --border: 226 232 240;
+}
+.dark {
+  --bg: 9 11 16;
+  --card: 17 22 30;
+  --text: 230 236 245;
+  --muted: 148 163 184;
+  --border: 30 41 59;
+}
+html, body { background: rgb(var(--bg)); color: rgb(var(--text)); }
+
+@layer components {
+  .card { @apply rounded-xl border bg-[rgb(var(--card))] border-[rgb(var(--border))] shadow-sm; }
+  .btn { @apply inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition; }
+  .btn-primary { @apply btn bg-brand-600 hover:bg-brand-700 text-white; }
+  .btn-secondary { @apply btn border border-[rgb(var(--border))] hover:bg-slate-100 dark:hover:bg-slate-800; }
+  .btn-ghost { @apply btn hover:bg-slate-100 dark:hover:bg-slate-800; }
+  .input {
+    @apply w-full rounded-lg border px-3 py-2 text-sm bg-[rgb(var(--card))] border-[rgb(var(--border))]
+           focus:outline-none focus:ring-2 focus:ring-brand-500;
+  }
+  .label { @apply text-xs font-medium text-[rgb(var(--muted))] mb-1 block; }
+  .badge { @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium; }
+  .table-head { @apply text-left text-xs font-semibold uppercase tracking-wide text-[rgb(var(--muted))] py-2 px-3; }
+  .table-cell { @apply py-3 px-3 text-sm border-t border-[rgb(var(--border))]; }
+}

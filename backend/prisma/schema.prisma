@@ -1,0 +1,345 @@
+// ============================================================================
+//  Prisma Schema — Gestion Fiscale Travailleur Autonome (Québec)
+// ============================================================================
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// ENUMS
+// ----------------------------------------------------------------------------
+
+/// Statut fiscal d'une activité ou d'un item de facture
+/// TAXABLE     : TPS 5% + TVQ 9.975%
+/// EXEMPT      : aucune taxe (ex. assistance en garderie)
+/// ZERO_RATED  : taxable à 0% (rare — export, certains aliments)
+enum TaxStatus {
+  TAXABLE
+  EXEMPT
+  ZERO_RATED
+}
+
+enum ClientType {
+  PARTICULIER
+  ENTREPRISE
+  GARDERIE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  INTERAC
+  CHEQUE
+  CARD
+  TRANSFER
+  STRIPE
+  MONERIS
+  OTHER
+}
+
+enum RecurrenceInterval {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+}
+
+enum UserRole {
+  ADMIN
+  EMPLOYEE
+  ACCOUNTANT
+}
+
+// ----------------------------------------------------------------------------
+// USERS (préparé pour activation future de l'auth)
+// ----------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String?  // null pour le MVP sans auth
+  role         UserRole @default(ADMIN)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  invoices Invoice[]
+  expenses Expense[]
+}
+
+// ----------------------------------------------------------------------------
+// SETTINGS — informations entreprise (NEQ, TPS, TVQ, adresse)
+// ----------------------------------------------------------------------------
+
+model Setting {
+  id              Int      @id @default(1)
+  companyName     String   @default("")
+  address         String   @default("")
+  city            String   @default("")
+  province        String   @default("QC")
+  postalCode      String   @default("")
+  phone           String   @default("")
+  email           String   @default("")
+  neq             String   @default("") // Numéro d'entreprise du Québec
+  tpsNumber       String   @default("") // Ex: 123456789RT0001
+  tvqNumber       String   @default("") // Ex: 1234567890TQ0001
+  tpsRate         Decimal  @default(0.05) @db.Decimal(6, 5)
+  tvqRate         Decimal  @default(0.09975) @db.Decimal(6, 5)
+  invoicePrefix   String   @default("FACT")
+  nextInvoiceNum  Int      @default(1)
+  paymentTermDays Int      @default(30)
+  logoUrl         String?
+  updatedAt       DateTime @updatedAt
+}
+
+// ----------------------------------------------------------------------------
+// ACTIVITY — Uber, Garderie, Ménage, Informatique, ...
+// Pilote la fiscalité par défaut des items de facture.
+// ----------------------------------------------------------------------------
+
+model Activity {
+  id          String    @id @default(cuid())
+  code        String    @unique // "UBER", "GARDERIE", "MENAGE", "INFO"
+  name        String
+  description String?
+  taxStatus   TaxStatus @default(TAXABLE)
+  color       String    @default("#6366f1") // tag couleur dashboard
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  invoiceItems      InvoiceItem[]
+  recurringInvoices RecurringInvoice[]
+
+  @@index([active])
+}
+
+// ----------------------------------------------------------------------------
+// CLIENT
+// ----------------------------------------------------------------------------
+
+model Client {
+  id         String     @id @default(cuid())
+  name       String
+  type       ClientType @default(PARTICULIER)
+  email      String?
+  phone      String?
+  address    String?
+  city       String?
+  province   String?    @default("QC")
+  postalCode String?
+  notes      String?
+  active     Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  invoices          Invoice[]
+  recurringInvoices RecurringInvoice[]
+
+  @@index([type])
+  @@index([active])
+  @@index([name])
+}
+
+// ----------------------------------------------------------------------------
+// INVOICE + ITEMS
+// ----------------------------------------------------------------------------
+
+model Invoice {
+  id          String        @id @default(cuid())
+  number      String        @unique // ex: FACT-2026-0001
+  status      InvoiceStatus @default(DRAFT)
+  issueDate   DateTime      @default(now())
+  dueDate     DateTime
+  clientId    String
+  client      Client        @relation(fields: [clientId], references: [id])
+  userId      String?
+  user        User?         @relation(fields: [userId], references: [id])
+  notes       String?
+  termsText   String?
+
+  // Montants cachés (snapshot à l'émission — règles fiscales du jour)
+  subtotal     Decimal @default(0) @db.Decimal(12, 2)
+  taxableBase  Decimal @default(0) @db.Decimal(12, 2) // sous-total des items taxables
+  exemptBase   Decimal @default(0) @db.Decimal(12, 2) // sous-total des items exonérés
+  tpsAmount    Decimal @default(0) @db.Decimal(12, 2)
+  tvqAmount    Decimal @default(0) @db.Decimal(12, 2)
+  total        Decimal @default(0) @db.Decimal(12, 2)
+  amountPaid   Decimal @default(0) @db.Decimal(12, 2)
+  amountDue    Decimal @default(0) @db.Decimal(12, 2)
+
+  // Audit des taux appliqués (pour reproductibilité historique)
+  tpsRate      Decimal @default(0.05) @db.Decimal(6, 5)
+  tvqRate      Decimal @default(0.09975) @db.Decimal(6, 5)
+
+  pdfPath      String?
+  sentAt       DateTime?
+  paidAt       DateTime?
+  recurringId  String?
+  recurring    RecurringInvoice? @relation(fields: [recurringId], references: [id])
+
+  items    InvoiceItem[]
+  payments Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([clientId])
+  @@index([issueDate])
+  @@index([dueDate])
+}
+
+model InvoiceItem {
+  id          String    @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  activityId  String?
+  activity    Activity? @relation(fields: [activityId], references: [id])
+
+  description String
+  quantity    Decimal   @default(1) @db.Decimal(10, 2)
+  unitPrice   Decimal   @db.Decimal(12, 2)
+  taxStatus   TaxStatus @default(TAXABLE)
+  lineTotal   Decimal   @db.Decimal(12, 2) // quantity * unitPrice (avant taxes)
+
+  order       Int       @default(0)
+
+  @@index([invoiceId])
+  @@index([activityId])
+}
+
+// ----------------------------------------------------------------------------
+// FACTURATION RÉCURRENTE (toutes les 2 semaines pour la garderie, p.ex.)
+// ----------------------------------------------------------------------------
+
+model RecurringInvoice {
+  id           String             @id @default(cuid())
+  name         String             // ex: "Garderie Mme Tremblay - bimensuel"
+  clientId     String
+  client       Client             @relation(fields: [clientId], references: [id])
+  activityId   String?
+  activity     Activity?          @relation(fields: [activityId], references: [id])
+  interval     RecurrenceInterval @default(BIWEEKLY)
+  startDate    DateTime
+  endDate      DateTime?
+  nextRunAt    DateTime
+  lastRunAt    DateTime?
+  active       Boolean            @default(true)
+
+  // Template d'items (JSON sérialisé en String → portable SQLite/Postgres)
+  // Format : JSON.stringify([{description, quantity, unitPrice, taxStatus, activityId?}])
+  itemsJson    String
+  notes        String?
+  termsText    String?
+  autoSendEmail Boolean           @default(false)
+
+  invoices Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, nextRunAt])
+  @@index([clientId])
+}
+
+// ----------------------------------------------------------------------------
+// PAYMENTS
+// ----------------------------------------------------------------------------
+
+model Payment {
+  id        String        @id @default(cuid())
+  invoiceId String
+  invoice   Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount    Decimal       @db.Decimal(12, 2)
+  method    PaymentMethod @default(INTERAC)
+  reference String?       // numéro de confirmation, no de chèque...
+  paidAt    DateTime      @default(now())
+  notes     String?
+  createdAt DateTime      @default(now())
+
+  @@index([invoiceId])
+  @@index([paidAt])
+}
+
+// ----------------------------------------------------------------------------
+// EXPENSES
+// ----------------------------------------------------------------------------
+
+model ExpenseCategory {
+  id          String    @id @default(cuid())
+  code        String    @unique // "ESSENCE", "ENTRETIEN_VEHICULE", "MENAGE_PRODUITS", "INTERNET", ...
+  name        String
+  deductible  Boolean   @default(true)
+  reclaimGST  Boolean   @default(true)  // CTI - crédit de taxe sur intrants TPS
+  reclaimQST  Boolean   @default(true)  // RTI - remboursement de taxe sur intrants TVQ
+  color       String    @default("#64748b")
+  expenses    Expense[]
+  active      Boolean   @default(true)
+}
+
+model Expense {
+  id          String          @id @default(cuid())
+  date        DateTime        @default(now())
+  description String
+  vendor      String?
+  amount      Decimal         @db.Decimal(12, 2) // total payé incl. taxes
+  subtotal    Decimal         @db.Decimal(12, 2) // avant taxes
+  tps         Decimal         @default(0) @db.Decimal(12, 2)
+  tvq         Decimal         @default(0) @db.Decimal(12, 2)
+  paymentMethod PaymentMethod @default(INTERAC)
+
+  categoryId  String
+  category    ExpenseCategory @relation(fields: [categoryId], references: [id])
+  userId      String?
+  user        User?           @relation(fields: [userId], references: [id])
+
+  receiptUrl  String?         // chemin local ou S3
+  notes       String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date])
+  @@index([categoryId])
+}
+
+// ----------------------------------------------------------------------------
+// TAX RECORD — snapshot d'un rapport trimestriel TPS/TVQ
+// ----------------------------------------------------------------------------
+
+model TaxRecord {
+  id            String   @id @default(cuid())
+  periodStart   DateTime
+  periodEnd     DateTime
+  // Revenus
+  revenueTaxable Decimal @default(0) @db.Decimal(14, 2)
+  revenueExempt  Decimal @default(0) @db.Decimal(14, 2)
+  tpsCollected   Decimal @default(0) @db.Decimal(12, 2)
+  tvqCollected   Decimal @default(0) @db.Decimal(12, 2)
+  // Crédits / intrants
+  tpsITC         Decimal @default(0) @db.Decimal(12, 2) // CTI
+  tvqITR         Decimal @default(0) @db.Decimal(12, 2) // RTI
+  // Net à remettre
+  tpsRemittance  Decimal @default(0) @db.Decimal(12, 2)
+  tvqRemittance  Decimal @default(0) @db.Decimal(12, 2)
+  notes          String?
+  generatedAt    DateTime @default(now())
+  filed          Boolean  @default(false)
+  filedAt        DateTime?
+
+  @@unique([periodStart, periodEnd])
+  @@index([periodEnd])
+}

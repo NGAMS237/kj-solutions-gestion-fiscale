@@ -1,0 +1,16 @@
+{
+  "name": "gestion-fiscale-quickstart",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Orchestrateur racine — démarrage local sans Docker (mode SQLite)",
+  "scripts": {
+    "quickstart": "node scripts/quickstart.mjs",
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm --prefix backend run start:dev\" \"npm --prefix frontend run dev\"",
+    "dev:backend": "npm --prefix backend run start:dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "reset": "node scripts/reset.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

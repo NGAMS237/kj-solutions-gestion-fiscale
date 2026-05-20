@@ -1,0 +1,35 @@
+# Node
+node_modules/
+dist/
+.next/
+*.log
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*token*
+*secret*
+*credential*
+
+# Bases de données locales
+backend/prisma/dev.db
+backend/prisma/dev.db-journal
+backend/prisma/*.db
+backend/prisma/migrations/dev/
+
+# Backup du schéma Postgres généré par quickstart
+backend/prisma/schema.postgres.prisma
+
+# Système / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Reverse proxy
+nginx/certs/
+
+# Uploads utilisateurs
+uploads/

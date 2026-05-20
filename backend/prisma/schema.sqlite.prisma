@@ -1,0 +1,279 @@
+// ============================================================================
+//  Prisma Schema — VERSION SQLITE (mode dev/démo, sans Docker)
+//  Pour la prod : revenir à schema.prisma (PostgreSQL).
+//  Particularités SQLite : pas d'enum natif (→ String), pas de Decimal (→ Float).
+//  Les valeurs autorisées sont définies dans src/common/enums.ts.
+// ============================================================================
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// USERS
+// ---------------------------------------------------------------------------
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String?
+  role         String   @default("ADMIN") // UserRole : ADMIN|EMPLOYEE|ACCOUNTANT
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  invoices Invoice[]
+  expenses Expense[]
+}
+
+// ---------------------------------------------------------------------------
+// SETTINGS
+// ---------------------------------------------------------------------------
+model Setting {
+  id              Int      @id @default(1)
+  companyName     String   @default("")
+  address         String   @default("")
+  city            String   @default("")
+  province        String   @default("QC")
+  postalCode      String   @default("")
+  phone           String   @default("")
+  email           String   @default("")
+  neq             String   @default("")
+  tpsNumber       String   @default("")
+  tvqNumber       String   @default("")
+  tpsRate         Float    @default(0.05)
+  tvqRate         Float    @default(0.09975)
+  invoicePrefix   String   @default("FACT")
+  nextInvoiceNum  Int      @default(1)
+  paymentTermDays Int      @default(30)
+  logoUrl         String?
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// ACTIVITY
+// ---------------------------------------------------------------------------
+model Activity {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  taxStatus   String   @default("TAXABLE") // TaxStatus : TAXABLE|EXEMPT|ZERO_RATED
+  color       String   @default("#6366f1")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  invoiceItems      InvoiceItem[]
+  recurringInvoices RecurringInvoice[]
+
+  @@index([active])
+}
+
+// ---------------------------------------------------------------------------
+// CLIENT
+// ---------------------------------------------------------------------------
+model Client {
+  id         String   @id @default(cuid())
+  name       String
+  type       String   @default("PARTICULIER") // ClientType : PARTICULIER|ENTREPRISE|GARDERIE
+  email      String?
+  phone      String?
+  address    String?
+  city       String?
+  province   String?  @default("QC")
+  postalCode String?
+  notes      String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  invoices          Invoice[]
+  recurringInvoices RecurringInvoice[]
+
+  @@index([type])
+  @@index([active])
+  @@index([name])
+}
+
+// ---------------------------------------------------------------------------
+// INVOICE + ITEMS
+// ---------------------------------------------------------------------------
+model Invoice {
+  id          String   @id @default(cuid())
+  number      String   @unique
+  status      String   @default("DRAFT") // InvoiceStatus : DRAFT|SENT|PAID|OVERDUE|CANCELLED
+  issueDate   DateTime @default(now())
+  dueDate     DateTime
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id])
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  notes       String?
+  termsText   String?
+
+  subtotal     Float @default(0)
+  taxableBase  Float @default(0)
+  exemptBase   Float @default(0)
+  tpsAmount    Float @default(0)
+  tvqAmount    Float @default(0)
+  total        Float @default(0)
+  amountPaid   Float @default(0)
+  amountDue    Float @default(0)
+
+  tpsRate      Float @default(0.05)
+  tvqRate      Float @default(0.09975)
+
+  pdfPath      String?
+  sentAt       DateTime?
+  paidAt       DateTime?
+  recurringId  String?
+  recurring    RecurringInvoice? @relation(fields: [recurringId], references: [id])
+
+  items    InvoiceItem[]
+  payments Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([clientId])
+  @@index([issueDate])
+  @@index([dueDate])
+}
+
+model InvoiceItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  activityId  String?
+  activity    Activity? @relation(fields: [activityId], references: [id])
+
+  description String
+  quantity    Float   @default(1)
+  unitPrice   Float
+  taxStatus   String  @default("TAXABLE") // TaxStatus
+  lineTotal   Float
+
+  order       Int     @default(0)
+
+  @@index([invoiceId])
+  @@index([activityId])
+}
+
+// ---------------------------------------------------------------------------
+// FACTURATION RÉCURRENTE
+// ---------------------------------------------------------------------------
+model RecurringInvoice {
+  id            String   @id @default(cuid())
+  name          String
+  clientId      String
+  client        Client   @relation(fields: [clientId], references: [id])
+  activityId    String?
+  activity      Activity? @relation(fields: [activityId], references: [id])
+  interval      String   @default("BIWEEKLY") // RecurrenceInterval
+  startDate     DateTime
+  endDate       DateTime?
+  nextRunAt     DateTime
+  lastRunAt     DateTime?
+  active        Boolean  @default(true)
+
+  itemsJson     String   // JSON.stringify(...) — décodé côté service
+  notes         String?
+  termsText     String?
+  autoSendEmail Boolean  @default(false)
+
+  invoices Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, nextRunAt])
+  @@index([clientId])
+}
+
+// ---------------------------------------------------------------------------
+// PAYMENTS
+// ---------------------------------------------------------------------------
+model Payment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount    Float
+  method    String   @default("INTERAC") // PaymentMethod
+  reference String?
+  paidAt    DateTime @default(now())
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@index([invoiceId])
+  @@index([paidAt])
+}
+
+// ---------------------------------------------------------------------------
+// EXPENSES
+// ---------------------------------------------------------------------------
+model ExpenseCategory {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  deductible Boolean  @default(true)
+  reclaimGST Boolean  @default(true)
+  reclaimQST Boolean  @default(true)
+  color      String   @default("#64748b")
+  expenses   Expense[]
+  active     Boolean  @default(true)
+}
+
+model Expense {
+  id            String          @id @default(cuid())
+  date          DateTime        @default(now())
+  description   String
+  vendor        String?
+  amount        Float
+  subtotal      Float
+  tps           Float           @default(0)
+  tvq           Float           @default(0)
+  paymentMethod String          @default("INTERAC") // PaymentMethod
+
+  categoryId    String
+  category      ExpenseCategory @relation(fields: [categoryId], references: [id])
+  userId        String?
+  user          User?           @relation(fields: [userId], references: [id])
+
+  receiptUrl    String?
+  notes         String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([date])
+  @@index([categoryId])
+}
+
+// ---------------------------------------------------------------------------
+// TAX RECORD
+// ---------------------------------------------------------------------------
+model TaxRecord {
+  id             String   @id @default(cuid())
+  periodStart    DateTime
+  periodEnd      DateTime
+  revenueTaxable Float    @default(0)
+  revenueExempt  Float    @default(0)
+  tpsCollected   Float    @default(0)
+  tvqCollected   Float    @default(0)
+  tpsITC         Float    @default(0)
+  tvqITR         Float    @default(0)
+  tpsRemittance  Float    @default(0)
+  tvqRemittance  Float    @default(0)
+  notes          String?
+  generatedAt    DateTime @default(now())
+  filed          Boolean  @default(false)
+  filedAt        DateTime?
+
+  @@unique([periodStart, periodEnd])
+  @@index([periodEnd])
+}
